@@ -1,4 +1,3 @@
-from http.client import responses
 import os
 from dotenv import load_dotenv
 from google import genai
@@ -53,36 +52,61 @@ def main():
         tools=[available_functions], system_instruction=system_prompt
     )
 
-    response = client.models.generate_content(
-        model="gemini-2.0-flash-001", contents=messages, config=config
-    )
-
-    if responses is None or response.usage_metadata is None:
-        print("response is malformed")
-        return
-
-    prompt_tokens = response.usage_metadata.prompt_token_count
-    response_tokens = response.usage_metadata.candidates_token_count
     if verbose_flag:
         print(f"User prompt: {prompt}")
-        print(f"Prompt tokens: {prompt_tokens}")
-        print(f"Response tokens: {response_tokens}")
 
-    if response.function_calls:
-        for function_call_part in response.function_calls:
-            function_call_result = call_function(function_call_part, verbose_flag)
+    MAX_ITERS = 20
+    for i in range(MAX_ITERS):
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.0-flash-001", contents=messages, config=config
+            )
+        except Exception as e:
+            print(f"Error generating content: {e}")
+            break
 
-            try:
-                payload = function_call_result.parts[0].function_response.response
-            except Exception:
-                raise RuntimeError(
-                    "Function call did not return a function_response.response"
-                )
+        if response is None or response.usage_metadata is None:
+            print("response is malformed")
+            break
 
+        if verbose_flag and response.usage_metadata is not None:
+            prompt_tokens = response.usage_metadata.prompt_token_count
+            response_tokens = response.usage_metadata.candidates_token_count
+            print(f"Prompt tokens: {prompt_tokens}")
+            print(f"Response tokens: {response_tokens}")
+
+        # Add model messages (the "I want to call ..." parts) to the convo
+        if response.candidates:
+            for candidate in response.candidates:
+                if candidate and candidate.content:
+                    messages.append(candidate.content)
+
+        if response.function_calls and len(response.function_calls) > 0:
+            for function_call_part in response.function_calls:
+                function_call_result = call_function(function_call_part, verbose_flag)
+                messages.append(function_call_result)
+
+                try:
+                    payload = function_call_result.parts[0].function_response.response
+                except Exception:
+                    raise RuntimeError(
+                        "Function call did not return a function_response.response"
+                    )
+
+                if verbose_flag:
+                    print(f"-> {payload}")
+            continue
+
+        if getattr(response, "text", None):
             if verbose_flag:
-                print(f"-> {payload}")
-    else:
-        print(response.text)
+                print("Final response:")
+            print(response.text)
+            break
+
+        # Otherwise, nothing more to do
+        if verbose_flag:
+            print("No further response; stopping.")
+        break
 
 
 main()
